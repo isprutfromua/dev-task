@@ -1,0 +1,62 @@
+services:
+  db:
+    image: ${MYSQL_IMAGE:?set MYSQL_IMAGE}
+    restart: unless-stopped
+    environment:
+      MYSQL_DATABASE: ghost
+      MYSQL_USER: ghost
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:?set MYSQL_PASSWORD}
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:?set MYSQL_ROOT_PASSWORD}
+    volumes:
+      - mysql_data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "root", "-p${MYSQL_ROOT_PASSWORD}"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+    networks: [internal]
+
+  ghost:
+    image: ${GHOST_IMAGE:?set GHOST_IMAGE}
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      url: https://${DOMAIN:?set DOMAIN}
+      database__client: mysql
+      database__connection__host: db
+      database__connection__user: ghost
+      database__connection__password: ${MYSQL_PASSWORD:?set MYSQL_PASSWORD}
+      database__connection__database: ghost
+      mail__transport: SMTP
+    volumes:
+      - ghost_content:/var/lib/ghost/content
+    expose: ["2368"]
+    networks: [internal]
+
+  caddy:
+    image: ${CADDY_IMAGE:?set CADDY_IMAGE}
+    restart: unless-stopped
+    depends_on: [ghost]
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      DOMAIN: ${DOMAIN:?set DOMAIN}
+      EMAIL: ${EMAIL:?set EMAIL}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    networks: [internal]
+
+networks:
+  internal:
+    driver: bridge
+
+volumes:
+  mysql_data:
+  ghost_content:
+  caddy_data:
+  caddy_config:

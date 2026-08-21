@@ -1,0 +1,94 @@
+#cloud-config
+# Values prefixed __ are rendered by deploy.sh before submission to Hetzner.
+package_update: true
+package_upgrade: true
+packages:
+  - ca-certificates
+  - curl
+  - ufw
+  - fail2ban
+  - unattended-upgrades
+  - jq
+  - rsync
+
+users:
+  - name: deploy
+    groups: [sudo]
+    shell: /bin/bash
+    sudo: "ALL=(ALL) NOPASSWD:ALL"
+    lock_passwd: true
+    ssh_authorized_keys:
+      - __BOOTSTRAP_SSH_KEY__
+
+write_files:
+  - path: /etc/default/ghost-tunnel
+    owner: root:root
+    permissions: '0600'
+    content: |
+      TS_AUTHKEY=__TAILSCALE_AUTH_KEY__
+      TS_HOSTNAME=__TAILSCALE_HOSTNAME__
+  - path: /etc/ssh/sshd_config.d/99-ghost.conf
+    owner: root:root
+    permissions: '0644'
+    content: |
+      PermitRootLogin no
+      PasswordAuthentication no
+      KbdInteractiveAuthentication no
+      X11Forwarding no
+      AllowUsers deploy
+  - path: /etc/fail2ban/jail.d/sshd.local
+    owner: root:root
+    permissions: '0644'
+    content: |
+      [sshd]
+      enabled = true
+      maxretry = 4
+      findtime = 10m
+      bantime = 1h
+  - path: /usr/local/sbin/ghost-tailscale-up
+    owner: root:root
+    permissions: '0700'
+    content: |
+      #!/usr/bin/env bash
+      set -euo pipefail
+      . /etc/default/ghost-tunnel
+      exec /usr/bin/tailscale up --ssh --auth-key="$TS_AUTHKEY" --hostname="$TS_HOSTNAME"
+  - path: /etc/systemd/system/ghost-tailscale-up.service
+    owner: root:root
+    permissions: '0644'
+    content: |
+      [Unit]
+      Description=Enroll Ghost host in Tailscale with SSH
+      Wants=tailscaled.service
+      After=tailscaled.service network-online.target
+      [Service]
+      Type=oneshot
+      ExecStart=/usr/local/sbin/ghost-tailscale-up
+      RemainAfterExit=yes
+      Restart=on-failure
+      RestartSec=10
+      [Install]
+      WantedBy=multi-user.target
+
+runcmd:
+  - [bash, -c, 'curl -fsSL https://tailscale.com/install.sh | sh']
+  - [systemctl, daemon-reload]
+  - [systemctl, enable, --now, tailscaled]
+  - [systemctl, enable, --now, ghost-tailscale-up]
+  # Public SSH is denied before the host is available. Tailscale uses outbound-only connectivity.
+  - [ufw, --force, reset]
+  - [ufw, default, deny, incoming]
+  - [ufw, default, allow, outgoing]
+  - [ufw, allow, 80/tcp]
+  - [ufw, allow, 443/tcp]
+  - [ufw, --force, enable]
+  - [systemctl, restart, ssh]
+  - [systemctl, enable, --now, fail2ban]
+  - [dpkg-reconfigure, -f, noninteractive, unattended-upgrades]
+  - [bash, -c, 'apt-get update && apt-get install -y docker.io docker-compose-plugin || apt-get install -y docker.io docker-compose-v2']
+  - [systemctl, enable, --now, docker]
+  - [bash, -c, 'usermod -aG docker deploy']
+  - [mkdir, -p, /opt/ghost]
+  - [chown, deploy:deploy, /opt/ghost]
+final_message: 'Ghost bootstrap complete after $UPTIME seconds'
+

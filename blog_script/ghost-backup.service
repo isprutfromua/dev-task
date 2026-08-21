@@ -1,0 +1,10 @@
+[Unit]
+Description=Encrypted Ghost backup using restic
+Wants=docker.service
+After=docker.service network-online.target
+
+[Service]
+Type=oneshot
+User=deploy
+WorkingDirectory=/opt/ghost
+ExecStart=/opt/ghost/backup.sh
